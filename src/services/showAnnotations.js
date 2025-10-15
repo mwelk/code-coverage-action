@@ -12,18 +12,18 @@ const showAnnotations = async (coverageData) => {
 
     coverageData.forEach(({ file, lines }) => {
       lines.forEach((line) => {
-        const message = () => {
-          if (Array.isArray(line)) {
-            return `file=${file},line=${line[0]},endLine=${
-              line[line.length - 1]
-            }::${line.join("-")} lines are not covered with tests`;
-          }
-          return `file=${file},line=${line}::${line} line is not covered with tests`;
-        };
-        // NOTE: consider an option to show lines directly by attaching 'line' param
-        // Need to fix the issue where we consider 'empty line' as covered line
-        // Empty lines should not interapt uncovered interval
-        core.info(`::${showAnnotationsInput} ${message()}`);
+        if (Array.isArray(line)) {
+          core.warning(`Test Coverage missing!`, {
+            file,
+            startLine: line[0],
+            endLine: line[line.length - 1]
+          });
+        } else {
+          core.warning(`Test Coverage missing!`, {
+            file,
+            startLine: line
+          });
+        }
       });
     });
   }

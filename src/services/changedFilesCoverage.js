@@ -15,7 +15,8 @@ const getChangedFilesCoverage = async (coverage) => {
   const changedFiles = await githubApi.getChangedFiles(octokit, {
     repo,
     owner,
-    pullNumber
+    pullNumber,
+    limit: 0
   });
 
   const workspacePath = getWorkspacePath();
