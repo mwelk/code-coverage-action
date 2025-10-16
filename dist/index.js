@@ -17934,6 +17934,41 @@ const path = __nccwpck_require__(1017);
 const { getPullRequestContext, getOctokit } = __nccwpck_require__(8383);
 const { getWorkspacePath } = __nccwpck_require__(6);
 
+/**
+ * Process a single line from a patch and update line tracking
+ */
+function processPatchLine(line, currentLine, changedLines) {
+  const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+  if (hunkMatch) return parseInt(hunkMatch[1], 10);
+  if (line.startsWith("-")) return currentLine;
+
+  if (line.startsWith("+")) {
+    changedLines.push(currentLine);
+    return currentLine + 1;
+  }
+
+  return line.startsWith("\\") ? currentLine : currentLine + 1;
+}
+
+/**
+ * Extracts the line numbers that were added or modified from a Git patch
+ * @param {string} patch - The Git patch string from GitHub API
+ * @returns {number[]} - Array of line numbers that were changed
+ */
+function extractChangedLines(patch) {
+  if (!patch) return [];
+
+  const changedLines = [];
+  const lines = patch.split("\n");
+
+  lines.reduce(
+    (currentLine, line) => processPatchLine(line, currentLine, changedLines),
+    0
+  );
+
+  return changedLines;
+}
+
 const getChangedFilesCoverage = async (coverage) => {
   const pullRequestContext = getPullRequestContext();
 
@@ -17959,14 +17994,25 @@ const getChangedFilesCoverage = async (coverage) => {
       );
 
       if (changedFile) {
-        return [
-          ...allFiles,
-          {
-            file: filePath,
-            url: changedFile.blob_url,
-            lines
-          }
-        ];
+        // Extract changed line numbers from the patch
+        const changedLines = extractChangedLines(changedFile.patch);
+
+        // Filter coverage lines to only include changed lines
+        const filteredLines = lines.filter((lineNumber) =>
+          changedLines.includes(lineNumber)
+        );
+
+        // Only include file if it has coverage on changed lines
+        if (filteredLines.length > 0) {
+          return [
+            ...allFiles,
+            {
+              file: filePath,
+              url: changedFile.blob_url,
+              lines: filteredLines
+            }
+          ];
+        }
       }
       return allFiles;
     },
@@ -18062,29 +18108,84 @@ const core = __nccwpck_require__(2186);
 const { getShowAnnotations } = __nccwpck_require__(6);
 const { getPullRequestContext } = __nccwpck_require__(8383);
 
-const showAnnotations = async (coverageData) => {
-  const showAnnotationsInput = getShowAnnotations();
-  const pullRequestContext = getPullRequestContext();
+const MAX_ANNOTATIONS = 10;
 
-  if (showAnnotationsInput && pullRequestContext) {
-    core.info("Show annotations feature enabled");
+function processAnnotations(coverageData) {
+  let annotationCount = 0;
+  const allMissingCoverage = [];
 
-    coverageData.forEach(({ file, lines }) => {
-      lines.forEach((line) => {
+  coverageData.forEach(({ file, lines }) => {
+    lines.forEach((line) => {
+      const lineInfo = Array.isArray(line)
+        ? { file, startLine: line[0], endLine: line[line.length - 1] }
+        : { file, startLine: line };
+
+      allMissingCoverage.push(lineInfo);
+
+      if (annotationCount < MAX_ANNOTATIONS) {
         if (Array.isArray(line)) {
+          core.info(
+            `Processing file: ${file}, lines: ${line[0]} - ${line[line.length - 1]}`
+          );
           core.warning(`Test Coverage missing!`, {
             file,
             startLine: line[0],
             endLine: line[line.length - 1]
           });
         } else {
+          core.info(`Processing file: ${file}, line: ${line}`);
           core.warning(`Test Coverage missing!`, {
             file,
             startLine: line
           });
         }
-      });
+        annotationCount += 1;
+      }
     });
+  });
+
+  return allMissingCoverage;
+}
+
+function generateSummary(allMissingCoverage) {
+  const summary = core.summary
+    .addHeading("Code Coverage Report")
+    .addRaw(`Total missing coverage locations: ${allMissingCoverage.length}`)
+    .addEOL();
+
+  if (allMissingCoverage.length > MAX_ANNOTATIONS) {
+    summary.addRaw(
+      `⚠️ Showing first ${MAX_ANNOTATIONS} annotations. See full list below.`
+    );
+    summary.addEOL();
+  }
+
+  summary.addHeading("Missing Coverage Details", 3);
+
+  const tableData = [
+    [
+      { data: "File", header: true },
+      { data: "Line(s)", header: true }
+    ],
+    ...allMissingCoverage.map(({ file, startLine, endLine }) => [
+      file,
+      endLine ? `${startLine}-${endLine}` : `${startLine}`
+    ])
+  ];
+
+  summary.addTable(tableData);
+  return summary;
+}
+
+const showAnnotations = async (coverageData) => {
+  const showAnnotationsInput = getShowAnnotations();
+  const pullRequestContext = getPullRequestContext();
+
+  if (showAnnotationsInput && pullRequestContext) {
+    core.info("Show annotations feature enabled");
+    const allMissingCoverage = processAnnotations(coverageData);
+    const summary = generateSummary(allMissingCoverage);
+    await summary.write();
   }
 };
 
